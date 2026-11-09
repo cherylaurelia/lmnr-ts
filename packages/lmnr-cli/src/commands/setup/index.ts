@@ -17,7 +17,12 @@ import {
   setupInvariant,
 } from "../../errors";
 import { orange, pc, pcOut } from "../../utils/colors";
-import { type EnvKeyLocation, findEnvKey } from "../../utils/env-file";
+import {
+  type EnvKeyLocation,
+  findEnvKey,
+  resolveEnvWriteTarget,
+  writeEnvFile,
+} from "../../utils/env-file";
 import { installSkill } from "../../utils/install-skill";
 import {
   type LocalProjectFile,
@@ -28,6 +33,9 @@ import { listProjects, promptProjectChoice } from "../../utils/projects";
 import { firstNonEmpty, trimSlash } from "../../utils/text";
 import { handleLogin } from "../login";
 import { ensureProjectKey } from "../project/link-core";
+
+const COMPOSE_HTTP_PORT = "8000";
+const COMPOSE_GRPC_PORT = "8001";
 
 export interface SetupOptions {
   writeEnv?: boolean;
@@ -202,6 +210,17 @@ export async function handleSetup(options: SetupOptions): Promise<void> {
     isJson,
   });
 
+  if (writeEnv && trimSlash(baseUrl) !== DEFAULT_BASE_URL) {
+    const target = envPath ?? (await resolveEnvWriteTarget(cwd, existingKey));
+    try {
+      await writeSelfHostedEndpoints(target, baseUrl, issuer);
+    } catch (err) {
+      process.stderr.write(
+        `${pc.yellow("Warning")}: could not write the Laminar endpoints to ${relative(cwd, target)} (${errorMessage(err)}).\n`,
+      );
+    }
+  }
+
   // --- 4. Skill install -----------------------------------------------------
 
   let skillsInstalled: string[] = [];
@@ -263,6 +282,40 @@ export async function handleSetup(options: SetupOptions): Promise<void> {
         "  4. View your traces in the browser:\n" +
         `     ${pcOut.cyan(frontendLink)}\n`,
     );
+  }
+}
+
+/**
+ * Save a self-hosted instance's endpoints next to the key, so the commands
+ * printed below and the SDK's span export reach it instead of the cloud default.
+ * `loadLocalEnv` reads the CLI's keys back. The gRPC port isn't known here: it's
+ * only assumed when the HTTP port shows the default compose layout.
+ */
+async function writeSelfHostedEndpoints(
+  envPath: string,
+  baseUrl: string,
+  issuer: string,
+): Promise<void> {
+  const cwd = process.cwd();
+  const url = trimSlash(baseUrl);
+  const port = url.match(/:(\d{1,5})$/)?.[1];
+  await writeEnvFile(envPath, url.replace(/:\d{1,5}$/, ""), "LMNR_BASE_URL");
+  if (port) {
+    await writeEnvFile(envPath, port, "LMNR_HTTP_PORT");
+  } else if (
+    (await findEnvKey(cwd, "LMNR_HTTP_PORT"))?.source.type === "file"
+  ) {
+    // A blank value reads as unset, so a port from an earlier setup can't stick.
+    await writeEnvFile(envPath, "", "LMNR_HTTP_PORT");
+  }
+  if (
+    port === COMPOSE_HTTP_PORT &&
+    !(await findEnvKey(cwd, "LMNR_GRPC_PORT"))
+  ) {
+    await writeEnvFile(envPath, COMPOSE_GRPC_PORT, "LMNR_GRPC_PORT");
+  }
+  if (trimSlash(issuer) !== DEFAULT_FRONTEND_URL) {
+    await writeEnvFile(envPath, trimSlash(issuer), "LMNR_FRONTEND_URL");
   }
 }
 

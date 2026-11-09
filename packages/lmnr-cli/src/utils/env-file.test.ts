@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { writeEnvFile } from "./env-file";
+import { readEnvVar, writeEnvFile } from "./env-file";
 
 const isWin = process.platform === "win32";
 
@@ -128,5 +128,14 @@ describe("writeEnvFile", () => {
       "",
     ].join("\n");
     expect(after).toBe(expected);
+  });
+});
+
+describe("blanking a value with writeEnvFile", () => {
+  it("reads back as unset", async () => {
+    const path = join(scratch, ".env");
+    await writeEnvFile(path, "8000", "LMNR_HTTP_PORT");
+    await writeEnvFile(path, "", "LMNR_HTTP_PORT");
+    expect(await readEnvVar(path, "LMNR_HTTP_PORT")).toBeNull();
   });
 });
