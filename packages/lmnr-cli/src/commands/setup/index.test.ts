@@ -147,3 +147,120 @@ describe("handleSetup — expired session recovery", () => {
     expect(h.handleLogin).not.toHaveBeenCalled();
   });
 });
+
+describe("handleSetup — self-hosted endpoints in .env", () => {
+  const ENV_PATH = "/tmp/project/.env";
+
+  beforeEach(() => {
+    h.safeReadCredentials.mockResolvedValue(VALID_CREDS);
+    h.refreshIfNeeded.mockResolvedValue(VALID_CREDS);
+    h.readLocalProjectFile.mockResolvedValue({ projectId: "proj-1" });
+    h.listProjects.mockResolvedValue([
+      { id: "proj-1", name: "Proj", workspaceId: "w1", workspaceName: "WS" },
+    ]);
+    h.findEnvKey.mockResolvedValue(null);
+    h.mintProjectApiKey.mockResolvedValue({
+      apiKey: "lmnr-key",
+      projectName: "Proj",
+      workspaceName: "WS",
+      workspaceId: "w1",
+    });
+    h.resolveEnvWriteTarget.mockResolvedValue(ENV_PATH);
+    h.writeEnvFile.mockResolvedValue({
+      path: ENV_PATH,
+      created: true,
+      replaced: false,
+    });
+    h.isPathGitIgnored.mockResolvedValue(null);
+    h.installSkill.mockResolvedValue({ written: [], skipped: true });
+  });
+
+  const writtenEndpoints = () =>
+    Object.fromEntries(
+      h.writeEnvFile.mock.calls
+        .filter((c: unknown[]) => c[2] !== undefined)
+        .map((c: unknown[]) => [c[2], c[1]]),
+    );
+
+  it.each([
+    [
+      "port in the URL",
+      "http://localhost:8000",
+      {
+        LMNR_BASE_URL: "http://localhost",
+        LMNR_HTTP_PORT: "8000",
+        LMNR_GRPC_PORT: "8001",
+        LMNR_FRONTEND_URL: "http://localhost:5667",
+      },
+    ],
+    [
+      "no port in the URL",
+      "https://lmnr.example.com/",
+      {
+        LMNR_BASE_URL: "https://lmnr.example.com",
+        LMNR_GRPC_PORT: "8001",
+        LMNR_FRONTEND_URL: "http://localhost:5667",
+      },
+    ],
+  ])("writes what the CLI and SDK read back: %s", async (_n, baseUrl, want) => {
+    h.safeReadCredentials.mockResolvedValue({
+      ...VALID_CREDS,
+      issuer: "http://localhost:5667",
+    });
+    h.refreshIfNeeded.mockResolvedValue({
+      ...VALID_CREDS,
+      issuer: "http://localhost:5667",
+    });
+    await handleSetup({
+      json: true,
+      browser: false,
+      baseUrl,
+      frontendUrl: "http://localhost:5667",
+    });
+    expect(writtenEndpoints()).toEqual(want);
+    expect(h.writeEnvFile.mock.calls[1][0]).toBe(ENV_PATH);
+  });
+
+  it("writes no endpoints for Laminar cloud", async () => {
+    await handleSetup({ json: true, browser: false });
+    expect(writtenEndpoints()).toEqual({});
+  });
+
+  it("keeps an LMNR_GRPC_PORT the user already set", async () => {
+    h.findEnvKey.mockImplementation((_cwd: string, name?: string) =>
+      Promise.resolve(
+        name === "LMNR_GRPC_PORT"
+          ? { value: "9001", source: { type: "process-env" } }
+          : null,
+      ),
+    );
+    await handleSetup({
+      json: true,
+      browser: false,
+      baseUrl: "http://localhost:8000",
+    });
+    expect(writtenEndpoints()).not.toHaveProperty("LMNR_GRPC_PORT");
+  });
+
+  it("does not touch .env with --no-write-env", async () => {
+    await handleSetup({
+      json: true,
+      browser: false,
+      writeEnv: false,
+      baseUrl: "http://localhost:8000",
+    });
+    expect(h.writeEnvFile).not.toHaveBeenCalled();
+  });
+
+  it("still finishes when the endpoints can't be written", async () => {
+    h.writeEnvFile
+      .mockResolvedValueOnce({ path: ENV_PATH, created: true, replaced: false })
+      .mockRejectedValue(new Error("EACCES"));
+    await handleSetup({
+      json: true,
+      browser: false,
+      baseUrl: "http://localhost:8000",
+    });
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+});
