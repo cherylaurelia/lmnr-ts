@@ -40,6 +40,7 @@ Module-specific notes live in nested `AGENTS.md` files next to the code (each wi
 ```
 LMNR_PROJECT_API_KEY  # API key (can also pass to initialize())
 LMNR_BASE_URL         # API base URL
+LMNR_GRPC_PORT        # gRPC port for span export when none is configured or in the URL (default 8443)
 LMNR_RELEASE          # Release (git SHA) stamped on spans; auto-detected if unset
 LMNR_TRAJECTORY_PATH  # Write the run as an lmnr-atif (ATIF) file; local-only, no key needed. May contain {trace_id}, {pid}
 LMNR_TRAJECTORY_FORCE_EXPORT  # With LMNR_TRAJECTORY_PATH: also export spans to Laminar

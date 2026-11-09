@@ -78,7 +78,7 @@ export class LaminarSpanExporter implements SpanExporter {
         ? parseInt(url.match(/:\d{1,5}$/g)![0].slice(1))
         : forceHttp
           ? 443
-          : 8443;
+          : parseInt(process?.env?.LMNR_GRPC_PORT ?? "") || 8443;
     }
 
     const urlWithoutSlash = url.replace(/\/$/, "").replace(/:\d{1,5}$/g, "");
