@@ -17,7 +17,12 @@ import {
   setupInvariant,
 } from "../../errors";
 import { orange, pc, pcOut } from "../../utils/colors";
-import { type EnvKeyLocation, findEnvKey } from "../../utils/env-file";
+import {
+  type EnvKeyLocation,
+  findEnvKey,
+  resolveEnvWriteTarget,
+  writeEndpointEnv,
+} from "../../utils/env-file";
 import { installSkill } from "../../utils/install-skill";
 import {
   type LocalProjectFile,
@@ -202,6 +207,47 @@ export async function handleSetup(options: SetupOptions): Promise<void> {
     isJson,
   });
 
+  let envUpdated = envPath;
+  const url = trimSlash(baseUrl);
+  const isCloud = url === DEFAULT_BASE_URL;
+  // Without an explicit --base-url, cloud means nothing is configured: leave .env alone.
+  if (writeEnv && (!isCloud || options.baseUrl)) {
+    const target = envPath ?? (await resolveEnvWriteTarget(cwd, existingKey));
+    const urlPort = url.match(/:(\d{1,5})$/)?.[1];
+    try {
+      const changed = await writeEndpointEnv(
+        target,
+        isCloud
+          ? { baseUrl: null }
+          : {
+              baseUrl: url.replace(/:\d{1,5}$/, ""),
+              // A flag replaces the endpoint; otherwise the port may be its own env var.
+              httpPort:
+                urlPort ??
+                (options.baseUrl
+                  ? undefined
+                  : process.env.LMNR_HTTP_PORT?.trim()),
+              frontendUrl:
+                trimSlash(issuer) === DEFAULT_FRONTEND_URL
+                  ? undefined
+                  : trimSlash(issuer),
+            },
+      );
+      if (changed.length > 0) {
+        envUpdated = target;
+        if (!isJson) {
+          process.stderr.write(
+            `${pc.green("✓")} Updated ${changed.join(", ")} in ${relative(cwd, target)}\n`,
+          );
+        }
+      }
+    } catch (err) {
+      process.stderr.write(
+        `${pc.yellow("Warning")}: could not write the Laminar endpoints to ${relative(cwd, target)} (${errorMessage(err)}).\n`,
+      );
+    }
+  }
+
   // --- 4. Skill install -----------------------------------------------------
 
   let skillsInstalled: string[] = [];
@@ -241,7 +287,7 @@ export async function handleSetup(options: SetupOptions): Promise<void> {
     workspaceId: link.workspaceId ?? null,
     workspaceName: link.workspaceName ?? null,
     apiKey,
-    envFileUpdated: envPath,
+    envFileUpdated: envUpdated,
     skillsInstalled,
     frontendUrl: frontendLink,
     userEmail: creds.userEmail ?? null,

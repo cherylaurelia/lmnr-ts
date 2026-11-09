@@ -5,7 +5,12 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { writeEnvFile } from "./env-file";
+import {
+  loadLocalEnv,
+  readEnvVar,
+  writeEndpointEnv,
+  writeEnvFile,
+} from "./env-file";
 
 const isWin = process.platform === "win32";
 
@@ -128,5 +133,87 @@ describe("writeEnvFile", () => {
       "",
     ].join("\n");
     expect(after).toBe(expected);
+  });
+});
+
+describe("writeEndpointEnv", () => {
+  const COMPOSE = { baseUrl: "http://localhost", httpPort: "8000" };
+  const keys = [
+    "LMNR_BASE_URL",
+    "LMNR_HTTP_PORT",
+    "LMNR_GRPC_PORT",
+    "LMNR_FRONTEND_URL",
+  ];
+  const clearEnv = () => {
+    for (const key of keys) delete process.env[key];
+  };
+  const read = (path: string, name: string) => readEnvVar(path, name);
+
+  beforeEach(clearEnv);
+  afterEach(clearEnv);
+
+  it("writes the compose layout, and the CLI loader reads it back", async () => {
+    const path = join(scratch, ".env");
+    const changed = await writeEndpointEnv(path, {
+      ...COMPOSE,
+      frontendUrl: "http://localhost:5667",
+    });
+    expect(changed).toEqual([
+      "LMNR_BASE_URL",
+      "LMNR_HTTP_PORT",
+      "LMNR_FRONTEND_URL",
+      "LMNR_GRPC_PORT",
+    ]);
+    await loadLocalEnv(scratch);
+    expect(process.env.LMNR_BASE_URL).toBe("http://localhost");
+    expect(process.env.LMNR_HTTP_PORT).toBe("8000");
+    expect(process.env.LMNR_FRONTEND_URL).toBe("http://localhost:5667");
+  });
+
+  it("doesn't guess a gRPC port away from the compose layout", async () => {
+    const path = join(scratch, ".env");
+    await writeEndpointEnv(path, { baseUrl: "https://lmnr.example.com" });
+    expect(await read(path, "LMNR_GRPC_PORT")).toBeNull();
+    await writeEndpointEnv(path, { baseUrl: "http://host", httpPort: "9000" });
+    expect(await read(path, "LMNR_GRPC_PORT")).toBeNull();
+  });
+
+  it("clears an old port and its guess when the instance moves", async () => {
+    const path = join(scratch, ".env");
+    await writeEndpointEnv(path, COMPOSE);
+    await writeEndpointEnv(path, { baseUrl: "https://lmnr.example.com" });
+    expect(await read(path, "LMNR_HTTP_PORT")).toBeNull();
+    expect(await read(path, "LMNR_GRPC_PORT")).toBeNull();
+  });
+
+  it("keeps a gRPC port the user chose, in the file or exported", async () => {
+    const path = join(scratch, ".env");
+    await writeEnvFile(path, "9001", "LMNR_GRPC_PORT");
+    await writeEndpointEnv(path, COMPOSE);
+    await writeEndpointEnv(path, { baseUrl: "https://lmnr.example.com" });
+    expect(await read(path, "LMNR_GRPC_PORT")).toBe("9001");
+
+    const fresh = join(scratch, ".env.exported");
+    process.env.LMNR_GRPC_PORT = "18001";
+    await writeEndpointEnv(fresh, COMPOSE);
+    expect(await read(fresh, "LMNR_GRPC_PORT")).toBeNull();
+  });
+
+  it("clears everything on a move back to cloud and keeps other lines", async () => {
+    const path = join(scratch, ".env");
+    await writeEnvFile(path, "keep", "OTHER");
+    await writeEndpointEnv(path, {
+      ...COMPOSE,
+      frontendUrl: "http://localhost:5667",
+    });
+    await writeEndpointEnv(path, { baseUrl: null });
+    for (const key of keys) expect(await read(path, key)).toBeNull();
+    expect(await read(path, "OTHER")).toBe("keep");
+  });
+
+  it("changes nothing on a second identical run", async () => {
+    const path = join(scratch, ".env");
+    await writeEndpointEnv(path, COMPOSE);
+    expect(await writeEndpointEnv(path, COMPOSE)).toEqual([]);
   });
 });

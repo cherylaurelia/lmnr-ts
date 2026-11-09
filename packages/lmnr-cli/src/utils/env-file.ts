@@ -162,6 +162,52 @@ export async function loadLocalEnv(
   }
 }
 
+/** Compose's HTTP port, the one signal that its gRPC port is also the default. */
+const COMPOSE_HTTP_PORT = "8000";
+const COMPOSE_GRPC_PORT = "8001";
+
+export interface EndpointEnv {
+  /** Base URL without a port; null clears the saved endpoints (back to cloud). */
+  baseUrl: string | null;
+  httpPort?: string;
+  frontendUrl?: string;
+}
+
+/**
+ * Save the instance's endpoints beside the key so later commands and SDK span
+ * export reach it. Reads the file itself, because `loadLocalEnv` has already
+ * copied its values into `process.env`. A key with no new value is blanked only
+ * if the file has it, and a blank value reads as unset. LMNR_GRPC_PORT is a
+ * guess, so a value that isn't our own guess, or an exported one, is left alone.
+ * Returns the keys that changed.
+ */
+export async function writeEndpointEnv(
+  envPath: string,
+  { baseUrl, httpPort, frontendUrl }: EndpointEnv,
+): Promise<string[]> {
+  const changed: string[] = [];
+  const save = async (name: string, value: string | undefined) => {
+    const current = await readEnvVar(envPath, name);
+    if ((value ?? null) === current) return;
+    await writeEnvFile(envPath, value ?? "", name);
+    changed.push(name);
+  };
+
+  await save("LMNR_BASE_URL", baseUrl ?? undefined);
+  await save("LMNR_HTTP_PORT", httpPort);
+  await save("LMNR_FRONTEND_URL", frontendUrl);
+
+  if (!process.env.LMNR_GRPC_PORT?.trim()) {
+    const current = await readEnvVar(envPath, "LMNR_GRPC_PORT");
+    if (httpPort === COMPOSE_HTTP_PORT && baseUrl) {
+      if (!current) await save("LMNR_GRPC_PORT", COMPOSE_GRPC_PORT);
+    } else if (current === COMPOSE_GRPC_PORT) {
+      await save("LMNR_GRPC_PORT", undefined);
+    }
+  }
+  return changed;
+}
+
 /**
  * Pick the file to write a freshly-minted key into:
  *  - rewrite in place if the key already lives in a file,

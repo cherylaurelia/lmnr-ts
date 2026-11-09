@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   findEnvKey: vi.fn(),
   resolveEnvWriteTarget: vi.fn(),
   writeEnvFile: vi.fn(),
+  writeEndpointEnv: vi.fn(),
   isPathGitIgnored: vi.fn(),
   mintProjectApiKey: vi.fn(),
   installSkill: vi.fn(),
@@ -47,6 +48,7 @@ vi.mock("../../utils/env-file", () => ({
   findEnvKey: h.findEnvKey,
   resolveEnvWriteTarget: h.resolveEnvWriteTarget,
   writeEnvFile: h.writeEnvFile,
+  writeEndpointEnv: h.writeEndpointEnv,
   isPathGitIgnored: h.isPathGitIgnored,
 }));
 vi.mock("../../auth/api-key", () => ({
@@ -145,5 +147,87 @@ describe("handleSetup — expired session recovery", () => {
       handleSetup({ json: true, writeEnv: false, browser: false }),
     ).rejects.toThrow("process.exit(6)");
     expect(h.handleLogin).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleSetup — endpoints in .env", () => {
+  const ENV_PATH = "/tmp/project/.env";
+
+  beforeEach(() => {
+    delete process.env.LMNR_HTTP_PORT;
+    const creds = { ...VALID_CREDS, issuer: "http://localhost:5667" };
+    h.safeReadCredentials.mockResolvedValue(creds);
+    h.refreshIfNeeded.mockResolvedValue(creds);
+    h.readLocalProjectFile.mockResolvedValue({ projectId: "proj-1" });
+    h.listProjects.mockResolvedValue([
+      { id: "proj-1", name: "Proj", workspaceId: "w1", workspaceName: "WS" },
+    ]);
+    h.findEnvKey.mockResolvedValue(null);
+    h.mintProjectApiKey.mockResolvedValue({
+      apiKey: "lmnr-key",
+      projectName: "Proj",
+      workspaceName: "WS",
+      workspaceId: "w1",
+    });
+    h.resolveEnvWriteTarget.mockResolvedValue(ENV_PATH);
+    h.writeEnvFile.mockResolvedValue({
+      path: ENV_PATH,
+      created: true,
+      replaced: false,
+    });
+    h.writeEndpointEnv.mockResolvedValue(["LMNR_BASE_URL"]);
+    h.isPathGitIgnored.mockResolvedValue(null);
+    h.installSkill.mockResolvedValue({ written: [], skipped: true });
+  });
+
+  afterEach(() => {
+    delete process.env.LMNR_HTTP_PORT;
+  });
+
+  const run = (options: { baseUrl?: string; writeEnv?: boolean }) =>
+    handleSetup({ json: true, browser: false, ...options });
+
+  it("splits the port from --base-url", async () => {
+    await run({ baseUrl: "http://localhost:8000/" });
+    expect(h.writeEndpointEnv).toHaveBeenCalledWith(ENV_PATH, {
+      baseUrl: "http://localhost",
+      httpPort: "8000",
+      frontendUrl: "http://localhost:5667",
+    });
+  });
+
+  it("keeps a port that came from LMNR_HTTP_PORT", async () => {
+    process.env.LMNR_HTTP_PORT = "8000";
+    const before = process.env.LMNR_BASE_URL;
+    process.env.LMNR_BASE_URL = "http://localhost";
+    await run({});
+    if (before === undefined) delete process.env.LMNR_BASE_URL;
+    else process.env.LMNR_BASE_URL = before;
+    expect(h.writeEndpointEnv.mock.calls[0][1].httpPort).toBe("8000");
+  });
+
+  it("drops that port when --base-url replaces the endpoint", async () => {
+    process.env.LMNR_HTTP_PORT = "8000";
+    await run({ baseUrl: "https://lmnr.example.com" });
+    expect(h.writeEndpointEnv.mock.calls[0][1].httpPort).toBeUndefined();
+  });
+
+  it("clears the endpoints on an explicit move back to cloud", async () => {
+    await run({ baseUrl: "https://api.lmnr.ai" });
+    expect(h.writeEndpointEnv).toHaveBeenCalledWith(ENV_PATH, {
+      baseUrl: null,
+    });
+  });
+
+  it("leaves .env alone for plain cloud setup and --no-write-env", async () => {
+    await run({});
+    await run({ baseUrl: "http://localhost:8000", writeEnv: false });
+    expect(h.writeEndpointEnv).not.toHaveBeenCalled();
+  });
+
+  it("still finishes when the endpoints can't be written", async () => {
+    h.writeEndpointEnv.mockRejectedValue(new Error("EACCES"));
+    await run({ baseUrl: "http://localhost:8000" });
+    expect(exitSpy).not.toHaveBeenCalled();
   });
 });

@@ -12,3 +12,5 @@
   key on a blip). The local helper is `probeProjectKey` in
   `src/commands/setup/index.ts`. The old standalone `GET /v1/project` probe
   (`src/auth/project-id.ts`) was DELETED — do not reintroduce a key-authed probe.
+
+- **`--base-url` is saved to `.env`.** `writeEndpointEnv` stores non-cloud endpoints beside the key for `loadLocalEnv` and SDK span export. It reads the file directly, since `.env` values are already in `process.env` by this point. `LMNR_GRPC_PORT=8001` is written only when the HTTP port is compose's 8000. An explicit `--base-url https://api.lmnr.ai` clears the saved endpoints.
